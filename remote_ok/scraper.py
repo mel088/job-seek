@@ -1,46 +1,101 @@
+import json
+import re
+
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-import ssl
-
-print(ssl.OPENSSL_VERSION)
 
 # URL of Remote OK's job listings page (you can modify for pagination or filters)
-url = 'https://remoteok.com/?location=US'
+url = "https://remoteok.com/remote-marketing-jobs?location=US"
+
+# Use a common User-Agent string to mimic a Chrome browser on macOS to pass bot through
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
 
 # Send a GET request to the URL
-response = requests.get(url)
-soup = BeautifulSoup(response.text, 'html.parser')
+response = requests.get(url, headers=headers)
 
+# Check if request was successful
+if response.status_code != 200:
+    print(f"Error {response.status_code}: Could not retrieve page.")
+
+soup = BeautifulSoup(response.text, "html.parser")
 # Find all job listings
-job_cards = soup.find_all('tr', class_='job')
 
-# Prepare lists to store extracted data
-job_titles = []
-companies = []
-job_links = []
+job_titles = soup.find_all("h2", itemprop="title")
+for job in job_titles:
+    print(job.text.strip())
 
-# Loop through each job listing and extract data
-for job_card in job_cards:
-    title_tag = job_card.find('h2', class_='job-title')
-    company_tag = job_card.find('span', class_='company')
-    link_tag = title_tag.find('a', href=True) if title_tag else None
+# List to hold job information
+job_list = []
 
-    # Extract job title, company name, and job link
-    if title_tag and company_tag and link_tag:
-        job_titles.append(title_tag.text.strip())
-        companies.append(company_tag.text.strip())
-        job_links.append(link_tag['href'])
+# Find all job rows in the table (adjust based on your page structure)
+job_rows = soup.find_all(
+    "tr", {"data-offset": True}
+)  # Find job rows based on attribute
 
-# Create a pandas DataFrame for better structure
-job_data = pd.DataFrame({
-    'Job Title': job_titles,
-    'Company': companies,
-    'Job Link': job_links
-})
+for job in job_rows:
+    # Extract Job Title (from <h2 itemprop="title">)
+    job_title = job.find("h2", itemprop="title")
+    if job_title:
+        job_title = job_title.get_text(strip=True)
 
-# Print the result
-print(job_data)
+    # Extract Job URL (from the href attribute of the <a> tag)
+    job_url_tag = job.find("a", {"class": "preventLink"})
+    job_url = "URL not found"
+    if job_url_tag:
+        job_url = "https://remoteok.com" + job_url_tag["href"]  # Full URL
 
-# Optionally, save the data to a CSV file
-job_data.to_csv('remote_jobs.csv', index=False)
+    # Extract Company Name (from JSON inside <script> tag)
+    script_tag = job.find("script", type="application/ld+json")
+    company_name = "Company not found"
+    if script_tag:
+        job_data = json.loads(script_tag.string)  # Parse the JSON data
+        company_name = job_data.get("hiringOrganization", {}).get(
+            "name", "Company not found"
+        )
+
+    # Extract Job Location (from <div class="location">)
+    location = job.find("div", class_="location")
+    if location:
+        location = location.get_text(strip=True)
+
+    # Extract Salary (from <div class="location tooltip">)
+    salary = job.find("div", class_="location tooltip")
+    if salary:
+        salary = salary.get_text(strip=True)
+
+    # Extract Description for Experience Filtering
+    description = job.find("div", class_="markdown")
+    experience_text = ""
+    if description:
+        experience_text = description.get_text(strip=True)
+
+    # Regex to match years of experience mentioned in the description
+    experience_match = re.search(
+        r"(\d+)\s*[\+\s]*years", experience_text, re.IGNORECASE
+    )
+
+    if experience_match:
+        experience_years = int(experience_match.group(1))  # Extract the number of years
+
+        # Only keep jobs that require 2 or fewer years of experience
+        if experience_years > 2:
+            continue  # Skip jobs requiring more than 2 years of experience
+
+    # Add the job details to the list
+    job_list.append(
+        {
+            "Job Title": job_title,
+            "Company Name": company_name,
+            "Location": location,
+            "Salary": salary,
+            "Job URL": job_url,
+        }
+    )
+
+df = pd.DataFrame(job_list)
+
+# Save the data to a CSV file
+df.to_csv("remote_jobs.csv", index=False)
