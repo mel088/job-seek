@@ -1,101 +1,140 @@
-import json
 import re
+import time
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-# URL of Remote OK's job listings page (you can modify for pagination or filters)
-url = "https://remoteok.com/remote-marketing-jobs?location=US"
 
-# Use a common User-Agent string to mimic a Chrome browser on macOS to pass bot through
-headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
-
-# Send a GET request to the URL
-response = requests.get(url, headers=headers)
-
-# Check if request was successful
-if response.status_code != 200:
-    print(f"Error {response.status_code}: Could not retrieve page.")
-
-soup = BeautifulSoup(response.text, "html.parser")
-# Find all job listings
-
-job_titles = soup.find_all("h2", itemprop="title")
-for job in job_titles:
-    print(job.text.strip())
-
-# List to hold job information
-job_list = []
-
-# Find all job rows in the table (adjust based on your page structure)
-job_rows = soup.find_all(
-    "tr", {"data-offset": True}
-)  # Find job rows based on attribute
-
-for job in job_rows:
-    # Extract Job Title (from <h2 itemprop="title">)
-    job_title = job.find("h2", itemprop="title")
-    if job_title:
-        job_title = job_title.get_text(strip=True)
-
-    # Extract Job URL (from the href attribute of the <a> tag)
-    job_url_tag = job.find("a", {"class": "preventLink"})
-    job_url = "URL not found"
-    if job_url_tag:
-        job_url = "https://remoteok.com" + job_url_tag["href"]  # Full URL
-
-    # Extract Company Name (from JSON inside <script> tag)
-    script_tag = job.find("script", type="application/ld+json")
-    company_name = "Company not found"
-    if script_tag:
-        job_data = json.loads(script_tag.string)  # Parse the JSON data
-        company_name = job_data.get("hiringOrganization", {}).get(
-            "name", "Company not found"
-        )
-
-    # Extract Job Location (from <div class="location">)
-    location = job.find("div", class_="location")
-    if location:
-        location = location.get_text(strip=True)
-
-    # Extract Salary (from <div class="location tooltip">)
-    salary = job.find("div", class_="location tooltip")
-    if salary:
-        salary = salary.get_text(strip=True)
-
-    # Extract Description for Experience Filtering
-    description = job.find("div", class_="markdown")
-    experience_text = ""
-    if description:
-        experience_text = description.get_text(strip=True)
-
-    # Regex to match years of experience mentioned in the description
-    experience_match = re.search(
-        r"(\d+)\s*[\+\s]*years", experience_text, re.IGNORECASE
-    )
-
-    if experience_match:
-        experience_years = int(experience_match.group(1))  # Extract the number of years
-
-        # Only keep jobs that require 2 or fewer years of experience
-        if experience_years > 2:
-            continue  # Skip jobs requiring more than 2 years of experience
-
-    # Add the job details to the list
-    job_list.append(
-        {
-            "Job Title": job_title,
-            "Company Name": company_name,
-            "Location": location,
-            "Salary": salary,
-            "Job URL": job_url,
+# Function to fetch the job details from a single job page
+def get_job_details(job_url):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
         }
-    )
+        time.sleep(15)
+        response = requests.get(job_url, headers=headers)
+        if response.status_code != 200:
+            return print(f"Error {response.status_code}: Could not retrieve page.")
+        job = BeautifulSoup(response.text, "html.parser")
 
-df = pd.DataFrame(job_list)
+        job_title = job.find("h2", itemprop="title")
+        if job_title:
+            job_title = job_title.get_text(strip=True)
 
-# Save the data to a CSV file
-df.to_csv("remote_jobs.csv", index=False)
+        # Extract Company Name
+        company_name = job.find("h3", itemprop="name")
+        if company_name:
+            company_name = company_name.get_text(strip=True)
+
+        # TODO: # Extract Days Posted Ago
+        # time_element = job.find('td', class_='time').find('time')
+        # datetime_str = time_element.get('datetime')
+        # if days_posted:
+        #     days_posted = days_posted.get_text(strip=True)
+
+        # Extract Job Location (from <div class="location">)
+        location = job.find("div", class_="location")
+        if location:
+            location = location.get_text(strip=True)
+
+        # Extract Salary (from <div class="location tooltip">)
+        salary = job.find("div", class_="location tooltip")
+        if salary:
+            salary = salary.get_text(strip=True)
+
+        # Extract Years of Experience
+        markdown_div = job.find("div", class_="markdown")
+        matches = []
+        if markdown_div:
+            text = markdown_div.get_text()
+            matches = re.findall(r"(\d+(?:\+?)?)\s*years?", text, re.IGNORECASE)
+            if matches:
+                print("Found mentions of years of experience:")
+                for match in matches:
+                    print(match)
+
+        # Collect all extracted details in a dictionary
+        job_details = {
+            "job_title": job_title,
+            "company_name": company_name,
+            # "description": description_text,
+            # "experience": years_of_experience,
+            "location": location,
+            "salary": salary,
+            # "benefits": benefits,
+            # "employment_type": employment_type,
+            "job_url": job_url,
+            "years_experience": matches,
+        }
+        return job_details
+
+    except Exception as e:
+        print(f"Error fetching details for {job_url}: {e}")
+        return None
+
+
+# Function to fetch job listings from a job board page (e.g., RemoteOK)
+def get_job_listings(board_url):
+    try:
+        # Use a common User-Agent string to mimic a Chrome browser on macOS to pass bot through
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
+        }
+        time.sleep(10)
+        response = requests.get(board_url, headers=headers)
+        if response.status_code != 200:
+            return print(f"Error {response.status_code}: Could not retrieve page.")
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Find all job links on the page
+        job_links = []
+        job_elements = soup.find_all(
+            "tr", class_=lambda x: x and "expand" in x
+        )  # Look for <tr> tags with 'expand' class
+        for job in job_elements:
+            job_id = job.get("class")[1].split("-")[1]
+            if job_id:
+                job_url = "https://remoteok.com/remote-jobs/" + job_id  # Full URL
+                job_links.append(job_url)
+        return job_links
+
+    except Exception as e:
+        print(f"Error fetching job listings: {e}")
+        return []
+
+
+# Main function to search multiple jobs and store details in a DataFrame
+def search_multiple_jobs(board_url):
+    job_links = get_job_listings(board_url)
+    if not job_links:
+        print("No job listings found.")
+        return None
+
+    # List to store all the job details
+    job_data = []
+
+    # Loop through all job links and fetch their details
+    for job_url in job_links:
+        job_details = get_job_details(job_url)
+        if job_details:
+            job_data.append(job_details)
+
+    # Convert the list of job details into a DataFrame
+    if job_data:
+        job_df = pd.DataFrame(job_data)
+        return job_df
+    else:
+        print("No job details found.")
+        return None
+
+
+if __name__ == "__main__":
+    # Example usage: Replace this URL with the page listing multiple jobs
+    job_board_url = "https://remoteok.com/remote-marketing-jobs?location=US"
+    job_df = search_multiple_jobs(job_board_url)
+
+    # If we found jobs, save to CSV or display the DataFrame
+    if job_df is not None:
+        print(job_df.head())  # Display first few rows of the DataFrame
+        job_df.to_csv("job_listings.csv", index=False)  # Save to CSV
